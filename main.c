@@ -5,35 +5,44 @@
 #include <stdatomic.h>
 
 #define CHECK(x, msg) do { if (!(x)) { perror(msg); return NULL; } } while(0)
-#define OUT_PIN 27
-#define IN_PIN 17
+#define HOT_PLUG_PIN 27
+#define SDA_PIN 17
+#define SCL_PIN 22
 
-static struct gpiod_line_request *out_request;
-static struct gpiod_line_request *in_request;
+static struct gpiod_line_request *hot_plug_request;
+static struct gpiod_line_request *sda_request;
+static struct gpiod_line_request *scl_request;
 
-static atomic_int pin_value = 0;
-static atomic_int running = 1;
-
-void set_pin(int on) {
-    gpiod_line_request_set_value(out_request, OUT_PIN, on ? GPIOD_LINE_VALUE_ACTIVE : GPIOD_LINE_VALUE_INACTIVE);
+void set_pin(int on, unsigned int pin) {
+    gpiod_line_request_set_value(hot_plug_request, HOT_PLUG_PIN, on ? GPIOD_LINE_VALUE_ACTIVE : GPIOD_LINE_VALUE_INACTIVE);
 }
 
-int get_pin(void) {
-    return atomic_load(&pin_value);
-}
+void *pin_sda_reader_thread(void *arg) {
+    FILE *fptr;
+    fptr = fopen("sda.txt", "w");
 
-void *pin_reader_thread(void *arg) {
     (void)arg;
-    while (atomic_load(&running)) {
-        int val = gpiod_line_request_get_value(in_request, IN_PIN);
-        //printf("val: %d\n", val);
-        if (val == 0) {
-            printf("SUCCESS: %d\n", val);
+
+    for(;;) {
+        int val = gpiod_line_request_get_value(sda_request, SDA_PIN);
+        if (val != -1) {
+            fprintf(fptr, "%d\n", val);
         }
-        atomic_store(&pin_value, val);
-        usleep(100);  // 1ms polling interval - adjust as needed
     }
-    return NULL;
+}
+
+void *pin_scl_reader_thread(void *arg) {
+    FILE *fptr;
+    fptr = fopen("scl.txt", "w");
+
+    (void)arg;
+
+    for(;;) {
+        int val = gpiod_line_request_get_value(scl_request, SCL_PIN);
+        if (val != -1) {
+            fprintf(fptr, "%d\n", val);
+        }
+    }
 }
 
 struct gpiod_line_request *init_pin(const char *chip_path, unsigned pin, int output) {
@@ -52,26 +61,23 @@ struct gpiod_line_request *init_pin(const char *chip_path, unsigned pin, int out
 }
 
 int main() {
-    out_request = init_pin("/dev/gpiochip0", OUT_PIN, 1);
-    in_request = init_pin("/dev/gpiochip0", IN_PIN, 0);
-    if (!out_request || !in_request) return 1;
+    hot_plug_request = init_pin("/dev/gpiochip0", HOT_PLUG_PIN, 1);
+    sda_request = init_pin("/dev/gpiochip0", SDA_PIN, 0);
+    scl_request = init_pin("/dev/gpiochip0", SCL_PIN, 0);
+    if (!hot_plug_request || !sda_request || !scl_request) return 1;
 
     pthread_t reader;
-    pthread_create(&reader, NULL, pin_reader_thread, NULL);
+    pthread_create(&reader, NULL, pin_sda_reader_thread, NULL);
+    pthread_create(&reader, NULL, pin_scl_reader_thread, NULL);
     sleep(1);
 
-    set_pin(0);
+    set_pin(0, HOT_PLUG_PIN);
     sleep(1);
-    set_pin(1);
-    sleep(5);
+    set_pin(1, HOT_PLUG_PIN);
+    sleep(1);
 
-    // Example: read the background-updated value
-    //printf("Current IN_PIN value: %d\n", get_pin());
-
-    atomic_store(&running, 0);
-    pthread_join(reader, NULL);
-
-    gpiod_line_request_release(out_request);
-    gpiod_line_request_release(in_request);
+    gpiod_line_request_release(hot_plug_request);
+    gpiod_line_request_release(sda_request);
+    gpiod_line_request_release(scl_request);
     return 0;
 }
