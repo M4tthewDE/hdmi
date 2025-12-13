@@ -1,8 +1,9 @@
+#include <bits/time.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <gpiod.h>
 #include <unistd.h>
 #include <pthread.h>
-#include <stdatomic.h>
 
 #define CHECK(x, msg) do { if (!(x)) { perror(msg); return NULL; } } while(0)
 #define HOT_PLUG_PIN 27
@@ -13,35 +14,42 @@ static struct gpiod_line_request *hot_plug_request;
 static struct gpiod_line_request *sda_request;
 static struct gpiod_line_request *scl_request;
 
+atomic_int last_scl = -1;
+
 void set_pin(int on, unsigned int pin) {
     gpiod_line_request_set_value(hot_plug_request, HOT_PLUG_PIN, on ? GPIOD_LINE_VALUE_ACTIVE : GPIOD_LINE_VALUE_INACTIVE);
 }
 
 void *pin_sda_reader_thread(void *arg) {
-    FILE *fptr;
-    fptr = fopen("sda.txt", "w");
-
     (void)arg;
+
+    int last_sda = -1;
 
     for(;;) {
         int val = gpiod_line_request_get_value(sda_request, SDA_PIN);
         if (val != -1) {
-            fprintf(fptr, "%d\n", val);
+            int scl = atomic_load(&last_scl);
+            if (last_sda == 1 && val == 0 && scl == 1) {
+                printf("START!\n");
+            }
+
+            last_sda = val;
         }
+
+        usleep(10000);
     }
 }
 
 void *pin_scl_reader_thread(void *arg) {
-    FILE *fptr;
-    fptr = fopen("scl.txt", "w");
-
     (void)arg;
 
     for(;;) {
         int val = gpiod_line_request_get_value(scl_request, SCL_PIN);
         if (val != -1) {
-            fprintf(fptr, "%d\n", val);
+            atomic_store(&last_scl, val);
         }
+
+        usleep(10000);
     }
 }
 
